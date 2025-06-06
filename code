@@ -1,0 +1,131 @@
+```{r}
+library(tidyverse)
+```
+
+
+My thought process:
+To upload a .CSV to Canvas it must be in a specific format, and formatting the student-facing quiz to fit it isn't easy (it requires a canvas-specific student ID they don't know/can't provide). Instead, we can take the info from the attendance forms and fit them into an exported canvas gradebook CSV.
+
+This script links their attendance (any response/submission of that week's quiz) to their PID, which students *can* provide. We can merge all responses from each week's attendance quiz into one data frame, filter out the unnecessary columns down to a PID, change all NAs (absences) to 0 pts, and change any response to the score assigned to a week of attendance. With the PID, we can append the gradebook CSV and just add in new "assignment" columns for each week's section attendance.
+
+After/throughout executing this code, there will be instances where it is easier to manually fix something. I have made note of those points when we get to them, but tried my best to write code to carry out those actions as well.
+
+## Read in the responses
+
+Below, each "df" is an example dataframe, containing that week's responses to the attendance form. They can/should be given better names outside of this example. Load them into R here:
+
+```{r warning = FALSE}
+df_1 = read.csv("C:\\Users\\kayme\\Downloads\\week_1.csv")
+df_2 = read.csv("C:\\Users\\kayme\\Downloads\\week_2.csv")
+df_3 = read.csv("C:\\Users\\kayme\\Downloads\\week_3.csv")
+df_4 = read.csv("C:\\Users\\kayme\\Downloads\\week_4.csv")
+```
+
+example (df 1):
+```{r}
+knitr::kable(df_1, format = "markdown")
+
+```
+
+## Merging each week into one DF
+
+Hopefully, all the PID entries will remain the same for each student across weeks*. Each added DF should only add that week's question as a new column (if someone misses a week, there will be no entry in that column), and only add a new row if there is a new name. In the example DFs: Mindy joins in week 2, Hank misses week 2, and Dave misses week 3.
+
+*If they have an incorrect PID, it will be appended to the end of the gradebook. Later, you can check the list of incorrect PIDs with the names of the students in the original spreadsheet/CSV/dataframe to find the student's real PID, and manually input the score for those students.
+
+Each week should be within the list below.
+
+```{r}
+list_wks = list(df_1, df_2, df_3, df_4)
+merged_full = list_wks %>% 
+  reduce(full_join, by = join_by(email, name, PID, section))
+
+knitr::kable(merged_full, format = "markdown")
+```
+
+*Notes:*
+*The full_join() method used "will return a df containing all observations (rows) from both x and y, regardless of whether or not they have matches. In the cases where there is not a corresponding observation, an NA value will be generated in the new cell. full_join() is the only mutate join that will contain all the original data from both x and y in the new df" (knowledge and info stolen from Dr. Hurwitz, cool visual graphic and more info: https://ethanhurwitz.github.io/intro-to-r/data-transformation.html#mutating-joins)*
+
+
+
+## Removing unnecessary columns
+
+The above code added additional columns with each quiz's timestamp (and any other unique question/variable from the other forms). We want to reduce the columns down to just the student PID and the questions which each correspond to a week. 
+
+**This step can be done manually and individually for each week's form responses, by deleting the unnecessary columns before uploading the .csv**
+
+This example code below will select the columns "PID" and any column that starts with "question", assigning those responses to a new dataframe. Hopefully the questions will have one key word that singles it out as the one to keep.
+
+``` {r}
+PID_Qs = merged_full %>%
+  select(c(PID, starts_with("question")))
+
+knitr::kable(PID_Qs, format = "markdown")
+```
+
+Alternatively, if there is no way to select the question they answered, the code below selects everything that is *not* specified (using !)
+
+```{r}
+PID_Qs_2 = merged_full %>%
+  select(!c(email, name, section, starts_with("Timestamp"), starts_with("unnecessary")))
+
+knitr::kable(PID_Qs_2, format = "markdown")
+```
+
+
+### Rename the columns
+Match to the existing column for the PIDs ("SIS.User.ID"*) and generate the assignment names for Canvas
+
+```{r}
+PID_Qs = PID_Qs %>% rename("SIS.User.ID" = "PID")
+colnames(PID_Qs)[2:length(PID_Qs)] = paste("Week", 1:length(PID_Qs), "Section", "Attendance")
+
+knitr::kable(PID_Qs, format = "markdown")
+```
+
+*The periods between each word will have to be deleted at the end, but I have noticed that when Canvas's gradebook is imported, it puts periods between each word. In order for the merge to work later, we need to match that format and fix it later. I hate Canvas.
+
+
+## Turn any answer into credit
+
+We aren't grading for accuracy, so if the student has a response submitted for that week, their attendance is counted by turning whatever value is in the column to a "1". If they don't have a response for that week, it should turn up as NA, and count as "0"
+
+```{r}
+scored_Qs = PID_Qs %>%
+  mutate(across(-1, ~ ifelse(is.na(.), 0, 1)))
+# the 1 at the end can be changed to whatever point is assigned to each week's attendance
+
+knitr::kable(scored_Qs, format = "markdown")
+```
+**BEWARE: If you do not assign this code to a new dataframe (ie, from PID_Qs to scored_Qs) and this specific chunk is run twice, the 0's will re-evaluate as 1's (as they are no longer NAs).**
+
+
+
+## Add the weekly scores to the gradebook
+
+First, export the entire gradebook from Canvas as a .csv file, then read it in to R (this can be done when you're reading in the weekly attendance responses also).
+
+*Using the actual gradebook export now*
+
+```{r}
+gradebook = read.csv("C:\\Users\\kayme\\Downloads\\2025-04-15T1116_Grades-COGS1_SP25_A00.csv")
+
+```
+
+```{r}
+appended_grades = full_join(gradebook, scored_Qs, by = join_by("SIS.User.ID"))
+
+```
+
+
+Now export the appended file to finish editing manually (students might have entered the wrong PID, or dropped the class. These scores need to be fixed by hand.)
+
+```{r}
+write.csv(appended_grades, "C:\\Users\\kayme\\Downloads\\cogs1_test_grades_v2APPENDED.csv")
+```
+
+Before importing to canvas, *you will have to manually delete a new column added from exporting from R (first column, just numbers).* You can delete the unnecessary assignment columns (just down to the attendance assignments we want to import), remove the periods between spaces (formatting issue), and convert the remaining NAs to "0"s by using the find/replace function (these NAs show up after exporting, for students who didn't attend any week's section yet). Incorrect PIDs will have to be cross checked against where they initially submitted the form.
+
+
+
+### All done!!
